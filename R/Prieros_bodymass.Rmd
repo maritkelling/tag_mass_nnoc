@@ -1,0 +1,365 @@
+---
+title: "04_Prieros_bodymass"
+author: "NA"
+date: '2023-04-11'
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+Natural variation in body mass of common noctule bats 
+
+Part of the tag mass study, work title:
+"Effects of tag mass on the physiology and behaviour of bats: A case study in an insectivorous bat"
+
+This script contains the analysis about the natural variation in body mass of common noctule bats, using a long term data set (10 years) of the colony in Prieros, Brandenburg.
+
+```{r}
+# prepare workspace and load packages
+pacman::p_load(here, tidyverse, ggplot2, lubridate)
+
+here::here()
+path_to_raw <- here("data_raw")
+path_to_output <- here("output")
+
+library(ggpubr)
+library(extrafont)
+```
+
+## load data
+```{r}
+# data set of colony in Prieros, south Brandenburg
+prieros <- read.csv( "data_raw/Prieros_20230301_korr.csv", sep = ";")
+
+# Import via base R if you run into format issues (or look up language format used on the PC and in excel)
+```
+
+## Overview
+```{r}
+str(prieros)
+
+# besides Common noctules data contains observations on P.nat and P.pyg
+unique(prieros$species)
+prieros %>% count(species)
+```
+
+## prepare data
+```{r}
+# filter for Common noctule bats
+nnoc <- prieros %>% filter(species == "Nyctalus noctula")
+unique(nnoc$date)
+nnoc$date <- dmy(nnoc$date) # change format from "." to "-"
+nnoc <- separate(nnoc, date, sep = "-", into = c("year", "month", "day"), remove = FALSE) # create new columns with date split up
+str(nnoc)
+# set numbers as numeric
+nnoc$year <-  as.numeric(nnoc$year)
+nnoc$month <- as.numeric(nnoc$month)
+nnoc$day <- as.numeric(nnoc$day)
+
+nnoc$forearm <- as.numeric(nnoc$forearm)
+nnoc$bodymass <- as.numeric(nnoc$bodymass)
+
+# set male first (as it is normally done in ecology)
+nnoc$sex <-  nnoc$sex %>% fct_relevel(c("m", "f"), after = 0) 
+
+# add body condition
+nnoc <- nnoc %>% mutate(body.condition = bodymass/forearm)
+```
+
+## overview Nnoc data
+```{r}
+nnoc %>% count(sex)
+nnoc %>% count(age)
+nnoc %>% count(bodymass)
+
+# exclude data with missing body mass
+bm <- nnoc %>% filter(bodymass > 0) # removed 55 NAs
+plot(bm$month, bm$bodymass)
+summary(bm$bodymass)
+plot(bm$month, bm$body.condition)
+summary(bm$body.condition)
+
+# filter for adults
+bm %>% count(age)
+bm.ad <- bm %>% filter(age == "ad.")
+plot(bm.ad$month, bm.ad$bodymass)
+summary(bm.ad$bodymass)
+bm.ad %>% count(month)
+
+############### for intra-individual variation #############
+# remove data with missing date
+bm.ad <- bm.ad %>% filter(!is.na(date))
+# filter for month with lowest body mass (February & March) + highest body mass (August & September)
+sub <- bm.ad %>% filter(month == "2" | month == "3" | month == "8" | month == "9")
+# alternative filter( ... %in% ...)
+
+str(sub)
+sub$sex <- as.character(sub$sex)
+sub <- sub %>% select(date, sex, month, bodymass, ring_no, forearm) %>% group_by(ring_no) # keep only useful columns
+unique(sub$month) # check
+
+#### population level:
+summary(bm.ad$bodymass)
+sub %>% filter(month == "2") %>% summary(.)
+# bm min in Feb: min 22.0 / max 29.5 / mean 25.6
+sub %>% filter(month == "8" | month == "9") %>% summary(.)
+# bm max in Aug/Sep: min 24.5 / max 39 / mean 31.1
+31.1-25.6 # 5.5
+24.5-22   # 2.2
+39-29.5   # 9.5
+
+# filter for individuals with data in Feb/Mar + Aug/Sep
+sub2 <- sub %>% count(ring_no) %>%  filter(n > 1)
+sub3 <- merge(sub, sub2, by.x = "ring_no", by.y = "ring_no")
+# write.csv2(sub3, file = "sub3_inclApril.csv")
+# no elegant way found in R, manually filtered in excel
+# n = 18, maybe include April as well? -> no it's ok, focus on the end of hibernation period
+
+# Individuals with data in winter + summer picked by hand (in excel):
+# Feb/Mar & Aug/Sep
+sub_list <-  c("A123136", "A123139", "A123160", "A123164", "A123183",
+               "A132516", "A132524", "A132538", "A132546", "A132556",
+               "A132572", "A132670", "A132680", "A135654", "A135658",
+               "A137028", "A137208", "A143604") 
+
+# filter for individuals in the list and create min + max body mass 
+sub4 <- sub3 %>% filter(ring_no %in% sub_list) %>% group_by(ring_no) %>% reframe(min = min(bodymass), max = max(bodymass), date = date, sex = sex, forearm = forearm)
+# add the gain in body mass
+sub4 <- sub4 %>% mutate(diff = max-min)
+summary(sub4)
+sd(sub4$diff)
+
+# reduce to first row of each ind to remove if individuals measured several times
+sub4 <- sub4 %>% distinct(ring_no, .keep_all = TRUE)
+sub4 <- sub4 %>% mutate(bc_min = min/forearm, bc_max = max/forearm)
+summary(sub4$bc_min); sd(sub4$bc_min) # mean 0.5 + - 0.04 g (min 0.4, max 0.5)
+sub4 <- sub4 %>% mutate(rel.diff = diff/min*100)
+summary(sub4$rel.diff); sd(sub4$rel.diff) # mean 26.5 + - 11.7 % (min 1.8, max 54,8 %)
+summary(sub4$diff); sd(sub4$diff)
+
+# overview male / female
+m <- sub4 %>% filter(sex == "m") # n = 6
+summary(m$diff); sd(m$diff) # body mass: mean 7 + - 4 g (min 0.5, max 11.5)
+summary(m$bc_min); sd(m$bc_min) # bmi: mean 0.5 + - 0.04 g (min 0.4, max 0.5)
+summary(m$bc_max); sd(m$bc_max) # bmi: mean 0.6 + - 0.06 g (min 0.5, max 0.6)
+f <- sub4 %>% filter(sex == "f") # n = 12
+summary(f$diff); sd(f$diff) # bod mass: mean 7 + - 2 g (min 4, max 10.5)
+summary(f$bc_min); sd(f$bc_min) # bmi: mean 0.5 + - 0.03 g (min 0.4, max 0.5)
+summary(f$bc_max); sd(f$bc_max) # bmi: mean 0.6 + - 0.04 g (min 0.5, max 0.7)
+# difference in body.cond
+# male
+summary(m$bc_max-m$bc_min); sd(m$bc_max-m$bc_min)
+# mean diff: 0.13 + - 0.07 / range: 0.01 - 0.22
+# female
+summary(f$bc_max-f$bc_min); sd(f$bc_max-f$bc_min)
+# mean diff: 0.12 + - 0.04 / range: 0.07 - 0.20
+
+# all sex at once
+summary(sub4$bc_max-sub4$bc_min); sd(sub4$bc_max-sub4$bc_min)
+# mean diff: 0.13 + - 0.05 / range: 0.01 - 0.22
+
+bm.ad %>% count(sex)
+summary(bm.ad$date) # Apr 2014 - Feb 2023
+# split into male / female
+bm.ad.m <- bm.ad %>% filter(sex == "m")
+bm.ad.f <- bm.ad %>% filter(sex == "f")
+summary(bm.ad.m$bodymass); sd(bm.ad.m$bodymass)
+summary(bm.ad.m$body.condition); sd(complete.cases(bm.ad.m$body.condition))
+summary(bm.ad.f$bodymass); sd(bm.ad.f$bodymass)
+summary(bm.ad.f$body.condition); sd(complete.cases(bm.ad.f$body.condition))
+summary(bm.ad$bodymass); sd(bm.ad$bodymass)
+
+# overview repeated measurement data per individual
+ind <- bm.ad %>% count(ring_no)
+ind %>% filter(n == 1)
+# ind 1x 1160 / 2x 319 / 3x 132 / 4x 55 / 5x 35 / 6x 29 / 7x 8 / 8x 6
+# 9x 3 / 10x 5 / 11x 1 / 12x 3 / 18x 1 (ring_no: A132692)
+unique(ind$n)
+barplot(ind$n)
+
+# look at individual measured 18 times
+A132692 <- bm.ad %>% filter(ring_no == "A132692")
+summary(A132692)
+
+# filter for bats with repeated measurements
+ind2 <- ind %>% filter(n > 1)
+ring_no <- merge(ind2, bm.ad, by.x = "ring_no", by.y = "ring_no")
+unique(ring_no$ring_no)
+summary(ind2)
+summary(ring_no$bodymass)
+bm.ind <- ring_no %>% group_by(ring_no) %>% summarise(mean = mean(bodymass),median = median(bodymass), min = min(bodymass), max = max(bodymass))
+bm.ind <- bm.ind %>% mutate(bm.delta = max - min)
+ring_no %>% group_by(ring_no)
+
+bm.ad %>% filter(ring_no == "A132692") %>% summary(A132692)
+bm.ad %>% filter(ring_no == "A123183") %>% summary(A123183)
+bm.ad %>% filter(ring_no == "A132546") %>% summary(A132546)
+bm.ad %>% filter(ring_no == "A132670") %>% summary(A132670)
+
+ind3 <- bm.ad %>% filter(ring_no %in% c("A132692", "A123183", "A132546", "A132670"))
+summary(ind3)
+
+```
+
+## Pearson Correlation: forearm / bodymass
+
+statistics requirements 
+  -assumptions: Continuous data, normally distributed, linearity, 
+                no outliers, similar spread across range
+                
+  Correlation tests
+  method = "pearson" [parametric correlation test],
+  but method = "kendall" or method = "spearman" [non-parametric correlation test]
+  if data do not come from a bivariate normal distribution (more than 2                dimensions, impossible to do some easy plotting)
+
+The Spearman’s rho and Kendall’s tau have the same conditions for use, but Kendall’s tau is generally preferred for smaller samples whereas Spearman’s rho is more widely used.
+  
+```{r}
+# Correlation
+
+hist(ring_no$forearm)
+summary(ring_no$forearm)
+ring_no %>% filter(forearm > 48) -> ring_no # remove outliers, because expect the three smaller values as measurement errors, e.g. 
+hist(ring_no$forearm)
+hist(ring_no$bodymass) # normally distributed
+
+hist(ring_no$bodymass, breaks = 20)
+qqnorm(ring_no$bodymass); qqline(ring_no$bodymass)
+hist(ring_no$forearm, breaks = 20)
+qqnorm(ring_no$forearm); qqline(ring_no$forearm)
+
+# or in ggplot
+ggqqplot(ring_no$bodymass, ylab = "bodymass")
+ggqqplot(ring_no$forearm, ylab = "forearm")
+
+# visualise with scatter
+ggscatter(ring_no, x = "bodymass", y = "forearm", add = "reg.line", conf.int = TRUE, cor.coef = TRUE, cor.method = "pearson")
+# Shapiro-Wilk to test normality
+shapiro.test(ring_no$bodymass) # W = 0.99679, p-value = 0.006805
+shapiro.test(ring_no$forearm)  # W = 0.99453, p-value = 6.699e-05
+
+# pearson correlation
+cor.test(ring_no$bodymass, ring_no$forearm, method = "pearson", use = "complete.obs")
+# if data contains missing values, add: use = "complete.obs"
+#cor.test(ring_no$bodymass, ring_no$forearm, method = "kendall", use = "complete.obs")
+#cor.test(ring_no$bodymass, ring_no$forearm, method = "spearman", use = "complete.obs")
+
+# interpret results: "soft" positive correlation, cor = 0.3003872, p-value < 2.2e-16
+```
+
+--> output: body mass and forearm are positively correlated!
+(well, no surprise)
+
+
+## plot models
+
+Load fonts and set font for ggplots globally
+install.packages("extrafont") # see https://github.com/wch/extrafont/
+
+font_import()   # run once
+loadfonts()     # loadfonts
+
+to see which are already available: windowsFonts()
+
+```{r}
+font_import()
+loadfonts(device = "win")
+fonts()
+theme_set(theme_bw(base_size = 22, base_family = "Bahnschrift"))
+
+#ggplot(bm.ad, aes(x = Fitted, y = Resid)) +
+#  geom_point() +
+#  facet_wrap(vars(sex)) +
+#  theme_bw() +
+#  geom_hline(yintercept = 0, col = 'blue')
+
+# plot per sex
+names <- c("m" = "Male", "f" = "Female")
+count_month_m <- bm.ad %>% filter(sex == "m") %>% count(month)
+count_month_m
+count_month_f<- bm.ad %>% filter(sex == "f") %>% count(month)
+count_month_f
+
+
+# body mass in g --> used in the article!
+theme_set(theme_bw(base_size = 22))
+text_x <- c("Feb", "\nMar", "Apr", "\nMay", "Jun", "\nJul", "Aug", "\nSep", "Oct", "\nNov", "Dec") # if used horizontally
+text_x <- c("Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec") # if used vertically
+
+ggplot(bm.ad, aes(x = month)) +
+  geom_rug(aes(y = bodymass, x = month)) +
+  geom_boxplot(aes(y = bodymass, group = month), outlier.shape = 1) +
+  #geom_point(aes(y = bodymass), size = 1, shape = 1) +
+  facet_wrap(vars(sex), labeller = as_labeller(names)) + # split in female and male
+  geom_smooth(aes(y = bodymass, col = sex), method="auto") + # auto chooses "gam"
+  scale_x_continuous(breaks = c(2,3,4,5,6,7,8,9,10,11,12), labels = text_x) +
+  labs(y = "Body Mass [g]", x = "Month") +
+  scale_color_manual(labels = c("male", "female"), values = c("navyblue", "red")) +
+  scale_shape_manual(labels = c("male", "female"), values = c(1,4)) +
+  guides(colour = "colorbar",size = "none") + # remove legend
+  #ylim(18, 42.5) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.3))
+  #ggtext::geom_richtext(data = count_month_m, aes(label = n, x = month, y = 42))
+
+# save
+#ggsave("plots/bm_prieros.png", plot = last_plot(), width = 900, height = 500, unit = "mm")
+
+# body condition --> maybe supplement?!
+ggplot(bm.ad, aes(x = month, y = body.condition)) +
+  #geom_point(aes(y = bodymass, col = sex, shape = sex, size = 10)) +
+  geom_rug(aes()) +
+  geom_boxplot(aes(group = month), outlier.shape = NA) +
+  facet_wrap(vars(sex), labeller = as_labeller(names)) +
+  geom_smooth(aes(col = sex), method="auto") + # auto chooses "gam"
+  scale_x_continuous(breaks = c(2,3,4,5,6,7,8,9,10,11,12)) +
+  labs(y = "body condition", x = "month") +
+  scale_color_manual(labels = c("male", "female"), values = c("navyblue", "red")) +
+  scale_shape_manual(labels = c("male", "female"), values = c(1,4)) +
+  guides(colour = "colorbar",size = "none") + # remove legend
+  ylim(0.35,0.8)
+
+# female / male in one plot
+ggplot(bm.ad, aes(x = month)) +
+  #geom_point(aes(y = body.condition, col = sex, shape = sex)) +
+  geom_smooth(aes(y = body.condition, col = sex), method="auto") + # auto chooses "gam"
+  scale_x_continuous(breaks = c(2,3,4,5,6,7,8,9,10,11,12)) +
+  labs(y = "body mass / forearm", x = "month") +
+  scale_color_manual(labels = c("female", "male"), values = c("navyblue", "red")) + # wrong?!
+  scale_shape_manual(labels = c("female", "male"), values = c(1,4))
+
+# female body mass per month
+bm.ad %>% filter(sex == "f") -> female
+female %>% filter(month == 9) %>% summary()
+# male body mass per month
+bm.ad %>% filter(sex == "m") -> male
+male %>% filter(month == 12) %>% summary()
+# Jul: 30.47, Aug: 31.56, Sep: 30.5, Oct: 30.51, Nov: 30.95, Dec: 29.64 
+
+```
+
+#####plot reg.model + tag mass data in bodymass/forearm
+
+```{r}
+theme_set(theme_bw(base_size = 22))
+
+filtered_master_data <- read.csv("output/master_data.csv") # load meta-analysis data
+tagged <- filtered_master_data %>% filter(tag.mass > "0")
+
+# rename sex
+tagged$sex[ tagged$sex %in% c("m", "Male", "male")] <- "m"
+tagged$sex[ tagged$sex %in% c("f", "female")] <- "f"
+unique(tagged$sex)
+
+## use this plot to show a well choose data set for meta-analysis
+ggplot() + 
+  scale_colour_manual(values = c("black", "black", "grey")) +
+  geom_point(data = ring_no, aes(bodymass, forearm, fill = "Colony Prieros"), shape = 21, alpha = 0.7, size = 3, fill="darkgrey", colour="black") +
+  geom_point(data = tagged, aes(body.mass, forearm, fill = "tagged bats", shape = "tagged bats"), shape = 23, alpha = 0.7, size = 3, fill="#99CCFF", colour="#99CCFF") +
+  geom_smooth(data = ring_no, aes(bodymass, forearm), method = "lm", col = "black") +
+  #geom_smooth(data = tagged, aes(body.mass, forearm), method = "lm", col = "blue") +
+  # not significant!!!
+  stat_ellipse(data = ring_no, aes(bodymass, forearm, fill = "Colony Prieros"), level = 0.95, segments = 51, type = "t", size = 1) +
+  stat_ellipse(data = tagged, aes(body.mass, forearm, col = "tagged bats"), level = 0.95, segments = 51, type = "t", col = "#99CCFF", size = 1) +
+  xlab("body mass [g]") +
+  ylab("forearm [mm]")
+
+```

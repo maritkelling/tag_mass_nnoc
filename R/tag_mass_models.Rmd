@@ -1,0 +1,353 @@
+---
+title: "tag_mass_models"
+author: "NA"
+date: "2024-01-31"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Sum up of the tag mass study.
+
+This script contains the analysis and final models of common noctule bats carrying different tag masses, using several studies in a meta-analysis.
+
+
+## load packages
+
+```{r setup, include=FALSE}
+
+library(readr) # to load data
+library(tidyverse)  # contains dplyr (data manipulation) and pipe operator
+library(ggplot2) # all kinds of plots
+library(ggpubr) # some easy-to-use plots without setting everything as in ggplot2
+library(gridExtra) # arrange plots
+library(cowplot)  # making effective plot grids
+library(ggeffects)  # model predictions
+library(broom)  # extracting model summaries
+library(effects) # to get the output of the model
+library(MuMIn) # for marginal effects
+library(lme4) # modelling
+library(glmmTMB) # glmm + adjustments
+library(DHARMa) # assumption checking
+library(report) # summarises facts to report on 
+library(here) # to connect to working folder/structure
+
+here::here()
+path_to_raw <- here("data_raw")
+path_to_output <- here("output")
+path_to_plot <- here("plot")
+
+```
+
+## load data
+
+```{r}
+filtered_master_data <- read.csv("output/master_data.csv")
+
+# split study date
+master_data <- separate(filtered_master_data, study.date, sep = "-", into = c("year", "month", "day"), remove = FALSE)
+
+master_data$year <-  as.numeric(master_data$year)
+master_data$month <- as.numeric(master_data$month)
+master_data$day <- as.numeric(master_data$day)
+# add day of the year
+master_data$yday <- yday(master_data$study.date)
+
+# filter to remove urban landscape
+#urban <- master_data %>% filter(landscape == "urban") # n = 51
+#master_data <- master_data %>% filter(landscape != "urban") # n = 183
+
+```
+
+Data explanations 
+
+str(filtered_master_data)
+first.author:          1st author of publication
+title:                 publication title
+species:               bat species
+sex:                   sex of individual bat
+age:                   age of individual bat
+lat:                   latitude in degree, WGS84 
+lon:                   longitude in degree, WGS84
+study.location:        summariesed study location (nearby city or village)
+study.date:            yyyy-mm-dd
+tag.type:              brand, company
+tag.mass:              mass of tag + VHF if needed (g)
+body.mass:             body mass before tagging (g)
+forearm:               forearm length (cm)
+body.mass.recapture:   body mass at time of retrieval (g)
+date.retrieval:        date of recapture (dd.mm.yyyy)
+time.retrieval:        time of recapture (hh:mm)
+duration:              time elapsed between tag application and bat retrieval (days)
+landscape:             landscape description, most dominant (forest, farmland, urban)
+emergence.firstnight:          emergence time during 1st night (min since sunset)
+emergence.secondnight:         emergence time during 2nd night (min since sunset)
+em.both                        emergence time during 1st night, gaps filled with 2nd night (in case of recording errors or no flight activity in 1 st night)
+flight.duration.firstnight:    flight duration (min) of first flight out during first night
+flight.duration.secondnight:   flight duration (min) of first flight out during 2nd night
+fd.both                        flight duration during 1st night, gaps filled with 2nd night (in case of recording errors or no flight activity in 1 st night)
+travelled.distance.firstnight: traveled distance (km) during first flight out during first night
+max.distance.roost.firstnight: distance (km) between roost and furthest location away from roost during first night
+travelled.distance.secondnight:traveled distance (km) during first flight out during 2nd night
+max.distance.roost.secondnight:distance (km) between roost and furthest location away from roost during 2nd night
+repository:             repository for flight tracks
+ID.bat.tag:                    ID bat/tag
+comment                        comments
+scheduled_timeinterval_s:      scheduled time interval / ping rate (s)
+body.condition                 body mass / forearm length (g/mm)
+rel.tag.mass                   tag mass / body mass *100 (%)
+type                           relative tag mass category (untagged, < 5 %, 5 to < 10 %, 10 to < 15 %, > 15 %)
+
+
+## filter data for 1st hypothesis (only data with capture-recapture body mass)
+
+```{r}
+# filter body mass data
+recap <- master_data %>% filter(body.mass.recap > 0)
+
+# calculate actual weight loss
+recap$body.mass.diff <- recap$body.mass.recap - recap$body.mass
+summary(recap$body.mass.diff)
+# calculate weight loss per day
+summary(recap$body.mass.diff/recap$duration)
+sd(recap$body.mass.diff/recap$duration)
+# calculate relative weight loss
+recap$body.mass.rel.diff <- recap$body.mass.diff / recap$body.mass * 100
+summary(recap$body.mass.rel.diff)
+# calculate relative weight loss per day
+summary(recap$body.mass.rel.diff/recap$duration)
+sd(recap$body.mass.rel.diff/recap$duration)
+
+# select useful columns
+sub_bm <- recap %>% dplyr::select(rel.tag.mass, sex, month, year, study.location, tag.type, body.mass, body.mass.recap, body.condition, duration, landscape, type, body.mass.diff, body.mass.rel.diff)
+sub_bm <- sub_bm %>% drop_na()
+str(sub_bm)
+
+sub_bm$sex <- as.factor(sub_bm$sex)
+sub_bm$landscape <- as.factor(sub_bm$landscape)
+sub_bm$type <- as.factor(sub_bm$type)
+sub_bm$tag.type <- as.factor(sub_bm$tag.type)
+sub_bm$study.location <- as.factor(sub_bm$study.location)
+sub_bm$year <- as.factor(sub_bm$year)
+
+# scale values for the model (rel.body.mass, duration, body.condition)
+sub_bm$s_rtg <- sub_bm$rel.tag.mass/sd(sub_bm$rel.tag.mass)
+```
+
+## filter data for 2nd hypothesis (only data with movement)
+
+```{r}
+# filter movement data
+move <- master_data
+# set as factor
+move$sex <- as.factor(move$sex)
+move$study.location <- as.factor(move$study.location)
+move$landscape <- as.factor(move$landscape)
+move$year <- as.factor(move$year) # set year as factor, because we don't expect a relationship between years for the selected values
+
+# emergence time: select useful columns (NA in 1st night filled with 2nd night n=202 / without urban n=178) (first night n=161 / without urban n=137)
+sub_em <- move %>% dplyr::select(rel.tag.mass, sex, month, year, study.location, landscape, emergence.firstnight, em.both)
+sub_em <- sub_em %>% drop_na(emergence.firstnight)
+# flight duration: select useful columns (NA in 1st night filled with 2nd night n=110) (first night n=106)
+sub_fd <- move %>% dplyr::select(rel.tag.mass, sex, month, year, landscape, study.location, flight.duration.firstnight, fd.both)
+sub_fd <- sub_fd %>% drop_na(fd.both)
+```
+
+##  model Recap
+
+```{r}
+sub_bm <- as.data.frame(sub_bm)
+
+#Recap <- glmmTMB(body.mass.rel.diff ~ rel.tag.mass + duration + body.condition + landscape + (1|study.location), data = sub_bm, REML = T, family = "gaussian"); summary(Recap)
+#simRes <- simulateResiduals(Recap, n = 1000);plot(simRes)
+
+Recap <- lmer(body.mass.rel.diff ~ rel.tag.mass + duration + body.condition + landscape + (landscape|year), data = sub_bm); summary(Recap)
+simRes <- simulateResiduals(Recap, n = 1000);plot(simRes)
+report(Recap)
+
+# only include terms you are interested in
+ggpred_Recap <- ggpredict(Recap, terms = c("landscape")) 
+plot(ggpred_Recap)
+a <- ggpredict(Recap, terms = c("rel.tag.mass")); plot(a);a
+b <- ggpredict(Recap, terms = c("duration")); plot(b);b
+c <- ggpredict(Recap, terms = c("body.condition")); plot(c);c
+
+plot(ggpred_Recap) # 1st term = x-achses, 2nd term = colour, 3rd and 4th term = facets
+
+# Plot the predictions with ggplot 
+p1 <- ggplot(a) + 
+   geom_ribbon(aes(x = x, ymin = predicted - std.error, ymax = predicted + std.error), 
+               fill = "lightgrey", alpha = 0.5) +  # error band
+   geom_line(aes(x = x, y = predicted), size = 1) + # slope
+   geom_point(data = sub_bm, aes(x=rel.tag.mass, y = body.mass.rel.diff), colour = "#666666") +
+   labs(x = "Relative Tag Mass [%]", y = "Body Mass Difference [%]", title = " ") + 
+   ylim(-25,10)
+p1
+p2 <- ggplot(b) + 
+   geom_ribbon(aes(x = x, ymin = predicted - std.error, ymax = predicted + std.error), 
+               fill = "lightgrey", alpha = 0.5) +  # error band
+   geom_line(aes(x = x, y = predicted), size = 1) + # slope
+   geom_point(data = sub_bm, aes(x=duration, y = body.mass.rel.diff), colour = "#666666") +
+   labs(x = "Duration [d]", y = " ", title = " ") + 
+   ylim(-25,10) +
+  theme(axis.text.y = element_blank(), axis.title.y = element_blank())
+p2
+p3 <- ggplot(c) +
+   geom_ribbon(aes(x = x, ymin = predicted - std.error, ymax = predicted + std.error), 
+               fill = "lightgrey", alpha = 0.5) +  # error band
+   #geom_point(data = Dat3,                      # adding the raw data (scaled values)
+   #           aes(x = rel.tag.mass2, y = body.mass.rel.diff, colour = duration)) +
+   geom_line(aes(x = x, y = predicted), size = 1) +  # slope
+   geom_point(data = sub_bm, aes(x=body.condition, y = body.mass.rel.diff), colour = "#666666") +
+   labs(x = "Body Mass Index [g/mm]", y = " ", title = " ") + 
+   ylim(-25,10) +
+   coord_cartesian(xlim = c(0.45, 0.74)) +
+  theme(axis.text.y = element_blank(), axis.title.y = element_blank())
+p3
+
+```
+
+
+## model Move1 + Move2
+
+```{r}
+################### emergence ##########################
+Dat2e <- sub_em
+
+# round response variable
+Dat2e$em_r <- round(Dat2e$em.both, digits = 0)
+summary(Dat2e$em_r)
+
+# model
+Move1 <- glmmTMB(em_r+34 ~ rel.tag.mass + sex * month + landscape + (landscape|year), family = Gamma(link = "log"), data = Dat2e); summary(Move1)
+simRes <- simulateResiduals(Move1, n = 1000);plot(simRes)
+#report(Move1)
+
+# extract predictions for tag mass
+(ggpred_Move1 <- ggpredict(Move1, terms = c("rel.tag.mass [2.5:19.5]")))
+# subtract the added 34 again
+ggpred_Move1$predicted <- ggpred_Move1$predicted-34
+ggpred_Move1$conf.low <- ggpred_Move1$conf.low-34
+ggpred_Move1$conf.high <- ggpred_Move1$conf.high-34
+
+# plot
+e1 <- ggplot(ggpred_Move1) +
+   geom_ribbon(aes(x = x, ymin = conf.low, ymax = conf.high), 
+               fill = "lightgrey", alpha = 0.5) +  # error band
+   geom_line(aes(x = x, y = predicted), size = 1) + # slope
+   geom_point(data = Dat2e, aes(x=rel.tag.mass, y = em_r), colour = "#666666") +
+   labs(x = NULL, y = "Emergence time \n[min after sunset]", 
+        title = " ") +
+  theme(axis.text.x = element_blank(), axis.title.x = element_blank())
+e1  
+
+# extract predictions for landscape
+(ggpred_Move1 <- ggpredict(Move1, terms = c("landscape")))
+# subtract the added 34 again
+ggpred_Move1$predicted <- ggpred_Move1$predicted-34
+ggpred_Move1$conf.low <- ggpred_Move1$conf.low-34
+ggpred_Move1$conf.high <- ggpred_Move1$conf.high-34
+
+# plot
+land_em <- ggpred_Move1; plot(land_em)
+land_em2 <- ggplot(land_em) +
+  geom_pointrange(aes(x = x, y = predicted, ymin = conf.low, ymax = conf.high), size = 1, shape = 9) +
+  geom_errorbar(aes(x = x, y = predicted, ymin = conf.low, ymax = conf.high), size = 1, width = 0.3) +
+  labs(x = NULL, y = "Emergence Time \n[min after sunset]") +
+  theme(axis.text.x = element_blank(), axis.title.x = element_blank(), axis.title.y = element_blank())
+land_em2
+
+################### flight duration ##########################
+Dat2f <- sub_fd
+
+# round response variable (first night because 1st or both are the same data set)
+Dat2f$fd_r <- round(Dat2f$fd.both, digits = 0)
+summary(Dat2f$fd_r)
+# log transform, this time it's possible because we have only positive values for flight duration
+Dat2f <- Dat2f %>%
+  mutate(log_fd = log(fd_r))
+
+# model
+Move2 <- lmer(log_fd ~ rel.tag.mass + sex * month  + landscape + (landscape|year), data = Dat2f); summary(Move2)
+simRes <- simulateResiduals(Move2, n = 1000);plot(simRes)
+#report(Move2)
+
+# predict tag mass with customized breaks
+(ggpred_Move2 <- ggpredict(Move2, terms = c("rel.tag.mass [2.5:19.5]")))
+# back transform log
+ggpred_Move2$predicted <- exp(ggpred_Move2$predicted)
+ggpred_Move2$conf.low <- exp(ggpred_Move2$conf.low)
+ggpred_Move2$conf.high <- exp(ggpred_Move2$conf.high)
+
+# plot
+f1 <- ggplot(ggpred_Move2) + 
+   geom_ribbon(aes(x = x, ymin = conf.low, ymax = conf.high), 
+               fill = "lightgrey", alpha = 0.5) +  # error band
+   geom_line(aes(x = x, y = predicted), size = 1) + # slope
+   geom_point(data = Dat2f, aes(x=rel.tag.mass, y = fd_r), colour = "#666666") +
+   xlim(2.5,19.5) +
+   labs(x = "Relative Tag Mass [%]", y = "Flight Duration \n[min]", 
+        title = " ")
+f1
+
+# extract predictions for landscape
+(ggpred_Move2 <- ggpredict(Move2, terms = c("landscape")))
+# back transform log
+ggpred_Move2$predicted <- exp(ggpred_Move2$predicted)
+ggpred_Move2$conf.low <- exp(ggpred_Move2$conf.low)
+ggpred_Move2$conf.high <- exp(ggpred_Move2$conf.high)
+
+# plot
+land_fd <- ggpred_Move2; plot(land_fd)
+land_fd2 <- ggplot(land_fd) +
+  geom_pointrange(aes(x = x, y = predicted, ymin = conf.low, ymax = conf.high), size = 1, shape = 9) +
+  geom_errorbar(aes(x = x, y = predicted, ymin = conf.low, ymax = conf.high), size = 1, width = 0.3, ) +
+  labs(x = NULL, y = "Flight Duration \n[min]") +
+  scale_x_discrete(labels = c("Farm-\nland", "Forest", "Urban")) +
+  theme(axis.title.y = element_blank())
+land_fd2
+```
+
+### save plots
+
+```{r}
+theme_set(theme_classic(base_size = 22))
+
+# body mass
+plot_bm <- ggarrange(p1,p2,p3, ncol = 3, nrow = 1, align = "h", label.y = 0, widths = c(1.2,1,1))
+plot_bm
+
+# emergence time & flight duration
+plot1 <- ggarrange(e1,land_em2, ncol = 2, nrow = 1, align = "h", label.y = 0, widths = c(2,1))
+plot1
+plot2 <- ggarrange(f1,land_fd2, ncol = 2, nrow = 1, align = "h", label.y = 0, widths = c(2,1))
+plot2
+
+# Convert to arrangeGrob
+plot_arrangeGrob <- arrangeGrob(plot1,
+                                plot2,
+                                heights = c(1,1.2),
+                                nrow = 2)
+# Print the arranged plot
+grid.arrange(plot_arrangeGrob)
+
+# resolution for your plots
+currres <- 400
+
+### save plot
+# adjust ggsave below
+
+```
+
+
+ggsave(filename = paste("bm2.png", sep = ""), # file name including the ending
+       plot = plot_bm, # object that will be saved here
+       width = 12, height = 8, # width and height of the plot
+       dpi = currres, # resolution
+       path = path_to_plot) # path where to save the plot
+       
+ggsave(filename = paste("em_fd.png", sep = ""), # file name including the ending
+       plot = plot_arrangeGrob, # object that will be saved here
+       width = 12, height = 8, # width and height of the plot
+       dpi = currres, # resolution
+       path = path_to_plot) # path where to save the plot

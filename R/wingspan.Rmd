@@ -1,0 +1,123 @@
+---
+title: "wingspan"
+author: "NA"
+date: "2023-10-16"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Part of the tag mass study, work title:
+"Effects of tag mass on the physiology and behaviour of bats: A case study in an insectivorous bat"
+
+This script contains the analysis about the wing span and body mass ratio for the aerodynamic model from measuring bats on the 15-09-2023 in Prieros.
+We compare it to the long term data set (10 years) of the colony in Prieros, Brandenburg.
+
+```{r}
+# prepare workspace and load packages
+pacman::p_load(here, tidyverse, ggplot2, lubridate, ggpubr)
+
+here::here()
+path_to_raw <- here("data_raw")
+path_to_output <- here("output")
+
+```
+
+## load data
+```{r}
+# data set of colony in Prieros, south Brandenburg
+data <- read.csv("data_raw/Prieros_15-09-23.csv", sep = ";")
+
+# Import via base R if you run into format issues (or look up language format used on the PC and in excel)
+```
+
+## Overview
+```{r}
+# all
+hist(data$tip_to_tip_wing_span_cm, breaks = 20)
+# adults
+ad <- data %>% filter(age == "ad")
+hist(ad$tip_to_tip_wing_span_cm)
+# subadults
+sub <- data %>% filter(age == "sub")
+hist(sub$tip_to_tip_wing_span_cm)
+
+# mean + sd per group
+group_by(data, age) %>% summarise(count = n(), mean = mean(tip_to_tip_wing_span_cm), sd = sd(tip_to_tip_wing_span_cm) )
+# plot both groups
+ggboxplot(data, x = "age", y = "tip_to_tip_wing_span_cm", y_lab = "wing span [cm]", xlab = "age")
+
+# wingspan
+summary(data$tip_to_tip_wing_span_cm/100); sd(data$tip_to_tip_wing_span_cm/100)
+# mean 0.362 m + - 0.11
+#aspect ration
+summary(data$tip_to_tip_wing_span_cm^2/data$wing_area_cm2); sd(data$tip_to_tip_wing_span_cm^2/data$wing_area_cm2)
+# mean 8.04 + - 0.33
+
+# relative tag mass (with 3.8 g tags as used in the wind tunnel experiment)
+summary(data$mass_g)
+summary(3.8 / data$mass_g * 100); sd(3.8 / data$mass_g * 100)
+# mean 13.55 +- 0.83 (range 12.26 - 15.83)
+```
+
+## t-test wing span
+
+first test assumptions:
+- continuous data
+- normally distributed (histogram or Kolmogorov-Smirnov or Shapiro-Wilk test)
+- random samples
+- enough data (>5 per group, also depending on the research field and expected effect size)
+- similar spread between groups
+
+use independent t-test (each individual only measured once)
+```{r}
+# test normality
+# Shapiro-Wilk normality test for adults
+with(data, shapiro.test(tip_to_tip_wing_span_cm[age == "ad"]))# p = 0.5
+# Shapiro-Wilk normality test for subadults
+with(data, shapiro.test(tip_to_tip_wing_span_cm[age == "sub"])) # p = 0.4
+# both groups p-values are greater than 0.05 implying that the distribution of the data are not significantly different from the normal distribution
+
+# test variance
+res.ftest <- var.test(tip_to_tip_wing_span_cm ~ age, data = data)
+res.ftest # p = 0.2
+# It’s greater than the significance level alpha = 0.05. In conclusion, there is no significant difference between the variances of the two sets of data.
+
+# t-test
+t.test(tip_to_tip_wing_span_cm ~ age, data = data, var.equal = TRUE)
+# t = -0.18155, df = 22, p = 0.8576, conf.int[-1.1153973, 0.9358342], est = mean ad: 36.12657 & sub: 36.21635 cm
+```
+
+how to read the results:
+t-value: test statistics
+df = degrees of freedom
+p-value
+conf.int = confidence interval of the mean 95%
+est: sample estimates = mean value of the samples
+
+## t-test wing area
+```{r}
+# mean + sd per group
+group_by(data, age) %>% summarise(count = n(), mean = mean(wing_area_cm2), sd = sd(wing_area_cm2) )
+# plot both groups
+ggboxplot(data, x = "age", y = "wing_area_cm2", y_lab = "wing area [cm2]", xlab = "age")
+
+# test normality
+# Shapiro-Wilk normality test for adults
+with(data, shapiro.test(wing_area_cm2[age == "ad"]))# p = 0.7
+# Shapiro-Wilk normality test for subadults
+with(data, shapiro.test(wing_area_cm2[age == "sub"])) # p = 0.02
+hist(sub$wing_area_cm2, breaks = 20)
+# both groups p-values are greater than 0.05 implying that the distribution of the data are not significantly different from the normal distribution
+
+# test variance
+res.ftest <- var.test(wing_area_cm2 ~ age, data = data)
+res.ftest # p = 0.96
+# It’s greater than the significance level alpha = 0.05. In conclusion, there is no significant difference between the variances of the two sets of data.
+
+# t-test
+t.test(wing_area_cm2 ~ age, data = data, var.equal = TRUE)
+# t = -0.3239, df = 22, p-value = 0.7491, conf.int[-8.627624  6.296733], est = ad: 162.3631 & sub: 163.5286
+```
+
+results: The p-value of the test is higher than the significance level alpha = 0.05. We can conclude that we couldn't find adults wing span and wing area are  significantly different from subadults measurements. p = 0.86 and p = 0.75.
