@@ -9,7 +9,7 @@ editor_options:
 Natural variation in body mass of common noctule bats 
 
 Part of the tag mass study, work title:
-"Effects of tag mass on the physiology and behaviour of bats: A case study in an insectivorous bat"
+"Effects of tag mass on the physiology and behaviour of common noctule bats"
 
 This script contains the analysis about the natural variation in body mass of common noctule bats, using a long term data set (10 years) of the colony in Prieros, Brandenburg.
 

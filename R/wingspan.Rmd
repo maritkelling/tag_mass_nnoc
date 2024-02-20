@@ -8,10 +8,10 @@ editor_options:
 ---
 
 Part of the tag mass study, work title:
-"Effects of tag mass on the physiology and behaviour of bats: A case study in an insectivorous bat"
+"Effects of tag mass on the physiology and behaviour of common noctule bats"
 
-This script contains the analysis about the wing span and body mass ratio for the aerodynamic model from measuring bats on the 15-09-2023 in Prieros.
-We compare it to the long term data set (10 years) of the colony in Prieros, Brandenburg.
+Part I: This script contains the preparation for the analysis of wing span and body mass ratio for the aerodynamic model from measuring bats on the 15-09-2023 in Prieros. 
+Part II: Follow up calculations are saved as R file "R_code_afpt_paper.R"
 
 ```{r}
 # prepare workspace and load packages
